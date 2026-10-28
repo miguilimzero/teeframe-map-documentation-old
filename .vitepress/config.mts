@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: "Map Docs  - TeeFrame",
+  title: "Map Docs - TeeFrame",
   description: "A VitePress Site",
 
   srcDir: 'src',
@@ -31,28 +31,32 @@ export default defineConfig({
         text: 'Getting Started',
         items: [
           { text: 'Introduction', link: '/' },
+          { text: 'Encoding', link: '/encoding' },
+        ]
+      },
+
+      {
+        text: 'Map Format',
+        items: [
           { text: 'Datafile', link: '/datafile' },
-        ]
-      },
-
-      {
-        text: 'Map Items',
-        items: [
           { text: 'Map Items', link: '/map-items' },
-        ]
-      },
-
-      {
-        text: 'Layers',
-        items: [
           { text: 'Layers', link: '/layers' },
+          { text: 'Envelopes', link: '/envelopes' },
         ]
       },
 
       {
-        text: 'Collision',
+        text: 'Gameplay',
         items: [
+          { text: 'Game Layer', link: '/game-layer' },
           { text: 'Collision', link: '/collision' },
+        ]
+      },
+
+      {
+        text: 'Implementation',
+        items: [
+          { text: 'Loading a Map', link: '/loading-map' },
         ]
       },
     ],
