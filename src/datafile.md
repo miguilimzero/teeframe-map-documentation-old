@@ -1,109 +1,178 @@
 # Datafile
 
-This page describes the .map file format — the binary container that Teeworlds uses to store game maps. Every .map file is a datafile. Understanding this format is the first step to loading and reading map data.
+Every `.map` file is a binary datafile. Its header and offset tables locate the items and data blocks that make up the map.
+
+All integers in the structures below occupy **4 bytes** and use signed little-endian encoding. See [Encoding](./encoding.md#integers) for decoding examples.
+
+## File Structure
+
+The sections appear in this order:
+
+| Section | Size in bytes |
+| --- | ---: |
+| Version header | 8 |
+| Header | 28 |
+| Item types | `num_item_types * 12` |
+| Item offsets | `num_items * 4` |
+| Data offsets | `num_data * 4` |
+| Uncompressed data sizes | `num_data * 4`, version 4 only |
+| Items | `item_size` |
+| Data blocks | `data_size` |
 
 ## Version Header
 
-Every datafile starts with a version header that identifies the file format:
+| Byte offset | Field | Description |
+| --- | --- | --- |
+| 0 | magic | 4 ASCII bytes: `DATA`. Readers also accept `ATAD`. |
+| 4 | version | Datafile version: `3` or `4`. |
 
-```sh
-byte[0-3]  // magic  - must be "DATA" (or "ATAD" reversed)
-byte[4-7]  // version - 3 or 4 (little-endian signed 32-bit integer)
-```
-
-:::info
-Readers should accept both `DATA` and `ATAD` as valid magic bytes. A bug in the reference implementation caused big-endian machines to save the reversed bytes.
-:::
+Both signatures use little-endian integers.
 
 ## Header
 
-The header follows the version header and contains size information for the rest of the file:
+| Byte offset | Field | Description |
+| --- | --- | --- |
+| 8 | size | Complete file size minus 16 bytes. |
+| 12 | swaplen | Number of bytes from offset 16 to the start of the data blocks. |
+| 16 | num_item_types | Number of entries in the item type table. |
+| 20 | num_items | Total number of items. |
+| 24 | num_data | Number of data blocks. |
+| 28 | item_size | Total size of the items section, including item headers. |
+| 32 | data_size | Total size of the data section as stored in the file. |
 
-```sh
-byte[8-11]   // size             - size of the datafile without the version header
-byte[12-15]  // swaplen          - bytes that contain integers (for endian swapping)
-byte[16-19]  // num_item_types   - number of item types
-byte[20-23]  // num_items        - total number of items
-byte[24-27]  // num_data         - number of raw data blocks
-byte[28-31]  // item_size        - total size of the items section (bytes)
-byte[32-35]  // data_size        - total size of the data section (bytes)
-```
-
-All values are little-endian signed 32-bit integers.
+`swaplen` marks the region whose integers need byte-order conversion on a big-endian machine. It ends where raw data blocks begin. Data blocks that contain integers, such as quads, are decoded separately according to their own layout.
 
 ## Item Types
 
-Each item type groups items of the same kind (e.g., layers, images, envelopes). The item types section comes after the header:
+Each entry occupies 12 bytes:
 
-```sh
-// repeated num_item_types times:
-byte[*-...]  // type_id - unique numeric type identifier
-byte[*-...]  // start   - index of the first item of this type
-byte[*-...]  // num     - number of items of this type
+| Field | Description |
+| --- | --- |
+| type_id | Item type identifier, fitting in 16 unsigned bits. |
+| start | Global item index of the first item of this type. |
+| num | Number of consecutive items of this type. |
+
+All items of a type are stored together. If an entry has `start = 14` and `num = 7`, global item indices 14 through 20 belong to that type.
+
+The map-specific type IDs are listed on [Map Items](./map-items.md).
+
+## Offset Tables
+
+The item offset table has one integer per item. Each offset is relative to the beginning of the **items section**, not the beginning of the file.
+
+The data offset table has one integer per data block. Each offset is relative to the beginning of the **data section**.
+
+Version 4 has a third table containing the uncompressed size of each data block. Version 3 has no such table.
+
+```c
+items_start = 36
+            + num_item_types * 12
+            + num_items * 4
+            + num_data * 4
+            + (version == 4 ? num_data * 4 : 0)
+
+data_start = items_start + item_size
+item_position = items_start + item_offsets[item_index]
 ```
 
-### Version 3 & 4 Type IDs
+For data block `i`:
 
-In Teeworlds 0.6, the item type IDs are:
-
-| Type ID | Name |
-| --------| :--- |
-| 0 | Version |
-| 1 | Info |
-| 2 | Images |
-| 3 | Envelopes |
-| 4 | Groups |
-| 5 | Layers |
-| 6 | Envelope Points |
-
-## Item Offsets & Data Offsets
-
-After item types, the file contains arrays of 32-bit integers for quick access:
-
-```sh
-byte[*-...]  // item_offsets  - one int per item (offset relative to first item)
-byte[*-...]  // data_offsets  - one int per data block (offset relative to first data block)
-byte[*-...]  // data_sizes    - one int per data block (uncompressed size, version 4 only)
+```c
+start = data_offsets[i]
+end = i + 1 < num_data ? data_offsets[i + 1] : data_size
+stored_length = end - start
+file_position = data_start + start
 ```
 
-:::info
-The `data_sizes` section is only present in **version 4** datafiles. It contains the uncompressed size of each data block.
-:::
+The final block uses `data_size` because there is no extra sentinel offset.
 
 ## Items
 
-Items contain metadata for the map. Each item has a type, an ID, and type-specific data:
+Each item has an 8-byte header followed by its payload:
 
-```sh
-// repeated for each item:
-byte[*-...]  // type_id_and_id - upper 16 bits = type_id, lower 16 bits = id
-byte[*-...]  // size           - size of item_data in bytes (must be divisible by 4)
-byte[*-...]  // item_data      - type-specific data (array of 32-bit integers)
+| Relative byte offset | Field | Description |
+| --- | --- | --- |
+| 0 | type_id_and_id | Upper 16 bits are the type ID; lower 16 bits are the item ID. |
+| 4 | size | Payload size in bytes, excluding this 8-byte header. |
+| 8 | item_data | Type-specific payload. Its size must be divisible by 4. |
+
+```c
+type_id = (type_id_and_id >> 16) & 0xFFFF
+id = type_id_and_id & 0xFFFF
 ```
 
-## Data
+An **item ID** identifies an item within its type. A **global item index** locates it in the items section. A **data block index** locates raw data. These are different identifiers and should not be used interchangeably.
 
-The data section contains raw data blocks (tile data, image data, etc.):
+### Reference Example
 
-```sh
-// concatenated data blocks:
-byte[*-...]  // data block 0
-byte[*-...]  // data block 1
-// ...
+In the example `dm1.map`, the layer type entry has `start = 21` and `num = 14`. Layer index 10 is therefore global item index `21 + 10 = 31`. Its item header has `type_id = 5` and `id = 10`.
+
+That layer's `data` field is `17`, which selects raw data block 17:
+
+```c
+global_item_index = layer_type.start + layer_index // 21 + 10 = 31
+item_position = items_start + item_offsets[global_item_index]
+
+// Read the layer payload at item_position + 8.
+data_index = layer.data // 17
+block_position = data_start + data_offsets[data_index]
 ```
+
+The item offset locates the layer metadata; the data offset locates its tile grid.
+
+## Data Blocks
 
 ### Version 3
 
-In version 3, data blocks are stored uncompressed, concatenated in order. Each block's start position and size are determined by the `data_offsets` array.
+Blocks are stored uncompressed. Extract the byte range specified by the data offset table.
 
 ### Version 4
 
-In version 4, each data block is individually compressed with **zlib**. The `data_offsets` point into the compressed stream, and the `data_sizes` array provides the uncompressed size for each block. To extract a block:
+Each block is compressed independently using zlib. The offsets refer to the compressed bytes. To read a block:
 
-1. Read `data_offsets[i]` and `data_offsets[i+1]` (or `data_size` for the last block) to get the compressed byte range.
-2. Extract the compressed bytes from the file.
-3. Decompress using zlib to obtain the original data.
+1. Calculate its stored byte range.
+2. Extract exactly that range.
+3. Decompress it with a zlib decoder.
+4. Check that the result matches its uncompressed size entry.
 
-:::info
-The TeeFrame `MapReader` class handles both version 3 and version 4 datafiles automatically, decompressing each block when needed.
-:::
+Each data block is a separate zlib stream. Use a decoder that accepts the zlib wrapper; raw DEFLATE and gzip decoders expect different formats. The header, items, and index tables are stored uncompressed, so decompress each data block individually rather than the whole file.
+
+## Example: dm1.map
+
+The example `dm1.map` has these header values:
+
+| Field | Value |
+| --- | ---: |
+| version | 4 |
+| size | 5789 |
+| swaplen | 2416 |
+| num_item_types | 6 |
+| num_items | 36 |
+| num_data | 21 |
+| item_size | 2012 |
+| data_size | 3373 |
+
+Its file length is 5805 bytes. The section positions are calculated as follows:
+
+```c
+items_start = 36 + 6 * 12 + 36 * 4 + 21 * 4 + 21 * 4 // 420
+data_start = items_start + 2012                       // 2432
+```
+
+The last `21 * 4` term is the uncompressed-size table for datafile version 4.
+
+The first item is the map version item:
+
+```text
+00 00 00 00 // type_id = 0, id = 0
+04 00 00 00 // item payload size = 4
+01 00 00 00 // map version = 1
+```
+
+Data block 0 occupies 18 compressed bytes and expands to the 10-byte string `bg_cloud1\0`.
+
+## Reader Checks
+
+A reader should reject negative counts and sizes, truncated sections, out-of-range references, overlapping or invalid byte ranges, and failed decompression. Check dimensions and decompressed sizes before allocating memory for a tile grid or image.
+
+See [Loading a Map](./loading-map.md#validation-checklist) for a validation checklist covering the container and its map contents.

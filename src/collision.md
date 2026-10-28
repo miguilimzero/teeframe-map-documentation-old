@@ -1,159 +1,219 @@
 # Collision
 
-This page describes the collision system in TeeFrame, which is a direct port of Teeworlds 0.6 `CCollision`. The collision system converts the Game layer tile data into collision flags and provides methods for movement and intersection tests.
+Collision queries check points, trace lines, and move characters against the map's solid tiles. Positions and velocities in the pseudocode are two-component vectors.
+
+Collision comes from the [Game layer](./game-layer.md). Visual layers, images, tile transformation flags, and quads do not affect it.
 
 ## Collision Flags
 
-Each tile in the collision grid has a flag value:
+| Value | Name | Meaning |
+| --- | --- | --- |
+| 0 | None | No collision flag. |
+| 1 | COLFLAG_SOLID | Blocks movement and solid line queries. |
+| 2 | COLFLAG_DEATH | Marks a death tile for game logic. |
+| 4 | COLFLAG_NOHOOK | Prevents hook attachment; combined with solid. |
 
-| Value | Name | Description |
-| ----- | :--- | :---------- |
-| 0 | None | Empty space, no collision. |
-| 1 | COLFLAG_SOLID | Solid wall. |
-| 2 | COLFLAG_DEATH | Death tile (kills on contact). |
-| 4 | COLFLAG_NOHOOK | Unhookable solid (hook bounces off). |
-
-:::info
-`COLFLAG_NOHOOK` tiles have both `COLFLAG_SOLID` and `COLFLAG_NOHOOK` set (value = 5).
-:::
+A no-hook tile combines `COLFLAG_SOLID` and `COLFLAG_NOHOOK`, producing value `5`. Use bitwise AND to check individual flags.
 
 ## Initialization
 
-The collision system is initialized from the Game layer of a map. The process converts tile indices to collision flags:
+Translate the Game layer's tile indices into collision values:
+
+| Game tile index | Collision value |
+| --- | --- |
+| 1, solid | 1 |
+| 2, death | 2 |
+| 3, no-hook | 5 |
+| All other indices | 0 |
 
 ```c
-for each tile in the game layer:
-    if tile.index > 128:
-        // Entity tiles and decorative tiles — no collision
-        collision[i] = 0
-    else:
-        switch tile.index:
-            case TILE_DEATH (2):  → COLFLAG_DEATH
-            case TILE_SOLID (1):  → COLFLAG_SOLID
-            case TILE_NOHOOK (3): → COLFLAG_SOLID | COLFLAG_NOHOOK
-            default:              → 0
+for tile in game_tiles:
+    switch tile.index:
+        case TILE_SOLID: collision.append(COLFLAG_SOLID)
+        case TILE_DEATH: collision.append(COLFLAG_DEATH)
+        case TILE_NOHOOK: collision.append(COLFLAG_SOLID | COLFLAG_NOHOOK)
+        default: collision.append(0)
 ```
 
-Tiles with indices above 128 are decorative or entity tiles and are treated as empty space for collision purposes. The entity positions are extracted separately from the Game layer for spawn points and pickups.
+Entity markers have no collision. Keep their original indices available until [entity scanning](./game-layer.md#scanning-entities) is complete.
 
 ## Grid Coordinates
 
-The collision grid uses **tile coordinates**, where each tile is 32×32 pixels. To convert from pixel coordinates to tile coordinates:
+The grid dimensions are in tiles. Each tile spans 32 world units.
+
+Point queries round world coordinates to integers, divide by 32 with truncation toward zero, and clamp to the map boundary:
 
 ```c
-tile_x = clamp(x / 32, 0, width - 1)
-tile_y = clamp(y / 32, 0, height - 1)
+function getCollisionAt(position):
+    x = clamp(truncate(round(position.x) / 32), 0, width - 1)
+    y = clamp(truncate(round(position.y) / 32), 0, height - 1)
+    return collision[y * width + x]
 ```
 
-The collision grid dimensions match the Game layer dimensions.
+Rounding uses the nearest integer, with halfway values rounded away from zero.
 
-## Methods
+A query outside the map samples the nearest edge tile. It does not automatically return solid or report that the position is out of bounds. [Game layer clipping](./game-layer.md#outside-the-map) is a separate rule.
 
-### checkPoint(x, y)
+## Point Queries
 
-Checks if a pixel position is on a solid tile.
+### checkPoint(position)
+
+Returns whether the sampled tile has `COLFLAG_SOLID` set:
 
 ```c
-bool checkPoint(float x, float y)
-    return isTileSolid(round(x), round(y))
+function checkPoint(position):
+    return (getCollisionAt(position) & COLFLAG_SOLID) != 0
 ```
 
-### getCollisionAt(x, y)
+It returns true for solid and no-hook tiles, but false for death tiles.
 
-Returns the collision flag at a pixel position.
+### getCollisionAt(position)
+
+Returns all flags at the sampled position. For example:
 
 ```c
-int getCollisionAt(float x, float y)
-    return getTile(round(x), round(y))
+is_death = (getCollisionAt(position) & COLFLAG_DEATH) != 0
 ```
 
-### getWidth() / getHeight()
+The query does not kill a character. Game logic must act on the returned flag.
 
-Returns the dimensions of the collision grid in tiles.
+## Line Queries
 
-### intersectLine(pos0, pos1)
+### intersectLine(start, end)
 
-Traces a line between two points and returns the first collision. Used for weapons like the laser rifle and for the hook.
+The routine samples a segment at roughly one-world-unit intervals and returns the first solid sample:
 
 ```c
-[int, Vector2, Vector2] intersectLine(Vector2 pos0, Vector2 pos1)
-    distance = distance(pos0, pos1)
-    for i = 0 to distance step 1:
-        pos = mix(pos0, pos1, i / distance)
-        if checkPoint(pos):
-            return [getCollisionAt(pos), pos, lastPos]
-        lastPos = pos
-    return [0, pos1, pos1]
+function intersectLine(start, end):
+    distance = length(end - start)
+    if distance == 0:
+        return (0, end, end)
+
+    sample_count = truncate(distance + 1)
+    previous = start
+
+    for i from 0 to sample_count - 1:
+        position = start + (end - start) * (i / distance)
+        if checkPoint(position):
+            return (getCollisionAt(position), position, previous)
+        previous = position
+
+    return (0, end, end)
 ```
 
-Returns a tuple: `[collisionFlag, hitPosition, positionBeforeHit]`.
+| Result | Meaning |
+| --- | --- |
+| flags | Collision flags at the first solid sample; `0` if none. |
+| hit_position | First sampled solid position, or the destination on a miss. |
+| before_hit | Previous sample, or the destination on a miss. |
 
-### testBox(pos, size)
+The query checks solid tiles at the sampled positions and passes through death tiles. It is a sampled approximation, not an exact intersection with tile boundaries. For a fractional distance, the last tested sample may be before the destination.
 
-Tests if an axis-aligned box at `pos` with `size` overlaps any solid tile. The box extends `size / 2` in each direction from `pos`.
+A zero-length segment returns `(0, end, end)` without tracing.
+
+The hook uses the returned no-hook flag to decide whether to attach or retract. Projectiles and lasers use the same query for wall hits; character hits are checked separately.
+
+## Box Queries
+
+### testBox(position, size)
+
+`position` is the box center. `size` is its full width and height. The routine checks four corners:
 
 ```c
-bool testBox(Vector2 pos, Vector2 size)
-    halfW = size.x * 0.5
-    halfH = size.y * 0.5
-    return checkPoint(pos.x - halfW, pos.y - halfH)
-        || checkPoint(pos.x + halfW, pos.y - halfH)
-        || checkPoint(pos.x - halfW, pos.y + halfH)
-        || checkPoint(pos.x + halfW, pos.y + halfH)
+function testBox(position, size):
+    half = size / 2
+    return checkPoint(position + (-half.x, -half.y))
+        or checkPoint(position + ( half.x, -half.y))
+        or checkPoint(position + (-half.x,  half.y))
+        or checkPoint(position + ( half.x,  half.y))
 ```
 
-### movePoint(pos, vel, elasticity, &bounces)
+Only the four corners are tested. A large box can contain a solid tile without any corner touching it, so this routine is intended for small physics boxes.
 
-Moves a point by `vel`, resolving collisions with an elasticity factor. The point bounces off solid tiles.
+## Movement
+
+The following routines return updated position and velocity values.
+
+### movePoint(position, velocity, elasticity)
+
+This routine checks the destination and reflects blocked velocity components:
 
 ```c
-void movePoint(Vector2 pos, Vector2 vel, float elasticity, int &bounces)
+function movePoint(position, velocity, elasticity):
     bounces = 0
-    if checkPoint(pos + vel):
-        if checkPoint(pos.x + vel.x, pos.y):
-            vel.x *= -elasticity; bounces++
-        if checkPoint(pos.x, pos.y + vel.y):
-            vel.y *= -elasticity; bounces++
-        if no axis collision (corner case):
-            vel.x *= -elasticity
-            vel.y *= -elasticity
-    else:
-        pos += vel
+
+    if not checkPoint(position + velocity):
+        return (position + velocity, velocity, bounces)
+
+    affected = 0
+    if checkPoint(position + (velocity.x, 0)):
+        velocity.x = velocity.x * -elasticity
+        bounces = bounces + 1
+        affected = affected + 1
+
+    if checkPoint(position + (0, velocity.y)):
+        velocity.y = velocity.y * -elasticity
+        bounces = bounces + 1
+        affected = affected + 1
+
+    if affected == 0:
+        velocity = velocity * -elasticity
+
+    return (position, velocity, bounces)
 ```
 
-### moveBox(pos, vel, size, elasticity)
+On collision, the position stays unchanged. The bounce counter increments for each individually blocked axis. The combined corner case reflects both axes without incrementing the counter.
 
-Moves an axis-aligned box by `vel`, resolving collisions against solid tiles. Used for character movement (28×28 hitbox).
+This routine tests the destination, not the full path. A fast point can pass through a wall if its destination is clear. Laser logic first traces the wall with `intersectLine()`, then uses `movePoint()` near the hit to calculate reflection.
+
+### moveBox(position, velocity, size, elasticity)
+
+Divide movement into `truncate(length(velocity)) + 1` steps. Each step checks the box and resolves blocked axes separately:
 
 ```c
-void moveBox(Vector2 pos, Vector2 vel, Vector2 size, float elasticity)
-    distance = length(vel)
-    max = (int)distance
-    if distance <= 0.00001: return
+function moveBox(position, velocity, size, elasticity):
+    distance = length(velocity)
+    if distance <= 0.00001:
+        return (position, velocity)
 
-    fraction = 1.0 / (max + 1)
-    for i = 0 to max:
-        newPos = pos + vel * fraction
+    steps = truncate(distance) + 1
+    fraction = 1 / steps
 
-        if testBox(newPos, size):
-            // Try each axis separately
-            if testBox(Vector2(pos.x, newPos.y), size):
-                newPos.y = pos.y; vel.y *= -elasticity
-            if testBox(Vector2(newPos.x, pos.y), size):
-                newPos.x = pos.x; vel.x *= -elasticity
-            // Corner case: no single axis resolved
-            if no axis hit:
-                newPos.y = pos.y; vel.y *= -elasticity
-                newPos.x = pos.x; vel.x *= -elasticity
+    repeat steps times:
+        next = position + velocity * fraction
 
-        pos = newPos
+        if testBox(next, size):
+            hits = 0
+
+            if testBox((position.x, next.y), size):
+                next.y = position.y
+                velocity.y = velocity.y * -elasticity
+                hits = hits + 1
+
+            if testBox((next.x, position.y), size):
+                next.x = position.x
+                velocity.x = velocity.x * -elasticity
+                hits = hits + 1
+
+            if hits == 0:
+                next = position
+                velocity = velocity * -elasticity
+
+        position = next
+
+    return (position, velocity)
 ```
 
-## How It Works
+An elasticity of `0` removes blocked velocity components. An elasticity of `1` reflects them without reducing their magnitude. The reference game uses a 28 by 28 box for characters and a 14 by 14 box with elasticity `0.5` for dropped flags.
 
-The collision system is initialized when a map is loaded, and is used by the game server for player physics:
+## What Collision Does Not Handle
 
-1. **Ground detection**: Checks two points at the character's feet (left and right edges) to determine if the character is grounded.
-2. **Movement**: `moveBox` is called every tick with the character's velocity and 28×28 hitbox.
-3. **Hook**: `intersectLine` traces the hook's path to find where it attaches to walls.
-4. **Weapons**: `intersectLine` traces projectile and laser paths.
+These routines do not implement character-versus-character collision, damage, pickup collection, or hook interaction with players. Those are separate game rules.
+
+Death tiles and out-of-map limits also require separate checks. See [Game Layer](./game-layer.md#death-tiles).
+
+## Source References
+
+- [Collision routines](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/collision.cpp)
+- [Point query wrappers](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/collision.h)
+- [Rounding](https://github.com/teeworlds/teeworlds/blob/0.6/src/base/math.h)
