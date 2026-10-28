@@ -67,6 +67,10 @@ Progress `a` is 0 at the first point and 1 at the second. The curve adjusts that
 
 In the pseudocode below, `applyCurve(curve_type, a)` uses the formula from this table.
 
+:::info
+You can see how the client evaluates these curves in [RenderEvalEnvelope](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/client/render_map.cpp).
+:::
+
 ## Evaluating an Envelope
 
 An envelope with no points produces zero values. With one point, it produces that point's decoded values. Multi-point envelopes loop using the last point's time as their period.
@@ -128,9 +132,3 @@ values = [1024, 1024, 1024, 512] // Multipliers: [1, 1, 1, 0.5]
 ```
 
 Applied to an opaque white quad corner `[255, 255, 255, 255]`, RGB stays unchanged and alpha is multiplied by `0.5`. This makes the quad half-transparent without changing its position or collision.
-
-## Source References
-
-- [Envelope structures](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/mapitems.h)
-- [Envelope interpolation and quad rendering](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/client/render_map.cpp)
-- [Client animation time selection](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/client/components/maplayers.cpp)

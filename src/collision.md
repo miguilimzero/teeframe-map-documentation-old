@@ -211,9 +211,3 @@ An elasticity of `0` removes blocked velocity components. An elasticity of `1` r
 These routines do not implement character-versus-character collision, damage, pickup collection, or hook interaction with players. Those are separate game rules.
 
 Death tiles and out-of-map limits also require separate checks. See [Game Layer](./game-layer.md#death-tiles).
-
-## Source References
-
-- [Collision routines](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/collision.cpp)
-- [Point query wrappers](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/collision.h)
-- [Rounding](https://github.com/teeworlds/teeworlds/blob/0.6/src/base/math.h)

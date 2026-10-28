@@ -111,10 +111,3 @@ function gameLayerClipped(position):
 Rounding uses the nearest integer, with halfway values rounded away from zero. Integer division truncates toward zero.
 
 Characters die, projectiles terminate, and flags return to their stands when this check reports clipping. Crossing the visible map edge alone does not trigger it; the entity must pass the 200-tile margin.
-
-## Source References
-
-- [Tile and entity constants](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/mapitems.h)
-- [Entity scanning during game initialization](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/server/gamecontext.cpp)
-- [Character death-tile checks](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/server/entities/character.cpp)
-- [Game layer clipping](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/server/entity.cpp)

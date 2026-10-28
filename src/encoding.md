@@ -94,6 +94,10 @@ function decodeI32String(integers):
 
 The final byte is stored as an unencoded zero. Set it to zero after decoding, then locate the string terminator. Encoded zero bytes elsewhere represent UTF-8 bytes with value 128.
 
+:::info
+You can find the reference encoder and decoder in the [StrToInts and IntsToStr functions](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/gamecore.h).
+:::
+
 ### Encoding
 
 A field of `n` integers has room for `4 * n - 1` string bytes plus its terminator. Pad the remaining character bytes with zeroes before adding 128.
@@ -134,8 +138,3 @@ stored_integer = truncate(decoded_value * 1024)
 | -1024 | -1 |
 
 Color envelope values use this encoding as multipliers, normally 0 to 1 after decoding. Tile tint and quad corner colors are different: their components are ordinary integers from 0 to 255.
-
-## Source References
-
-- [Integer-string conversion functions](https://github.com/teeworlds/teeworlds/blob/0.6/src/game/gamecore.h)
-- [Fixed-point conversion functions](https://github.com/teeworlds/teeworlds/blob/0.6/src/base/math.h)
