@@ -1,139 +1,120 @@
 # Map Items
 
-This page describes all map item types found in Teeworlds 0.6 maps. Each item type has a unique `type_id` and defines a specific aspect of the map: version info, author metadata, images, envelopes, groups, and layers.
+Map items describe metadata, images, animations, groups, and layers. The tables below list payload fields in file order; each integer occupies 4 bytes. See [Encoding](./encoding.md) for integer and string formats.
 
-All item data fields are 32-bit integers. String fields are stored as data block indices pointing to null-terminated C strings, except for `I32String` fields which use a special encoding.
+## Item Types
+
+| Type ID | Name | Contents |
+| --- | --- | --- |
+| 0 | [Version](#version-item-type-id-0) | Map format version. |
+| 1 | [Info](#info-item-type-id-1) | Author and other metadata. |
+| 2 | [Images](#image-item-type-id-2) | Embedded or external images. |
+| 3 | [Envelopes](./envelopes.md#envelope-item-type-id-3) | Animation definitions. |
+| 4 | [Groups](#group-item-type-id-4) | Layer ranges and view settings. |
+| 5 | [Layers](./layers.md) | Tilemap and quad layer definitions. |
+| 6 | [Envelope Points](./envelopes.md#envelope-points-type-id-6) | Points shared by all envelopes. |
+
+A type table entry is present only when that type has items. Older maps can omit the Info item, including the `dm1.map` and `ctf1.map` used in the examples.
+
+## Field Types
+
+- **Integer**: one signed 32-bit integer.
+- **Data index**: one integer pointing to a raw data block.
+- **Item index**: one integer pointing to an item within a particular type, such as an image or envelope. Index 0 selects that type's first item.
+- **I32String**: a string stored directly in several integers. See [I32String Encoding](./encoding.md#i32string-encoding).
+
+An optional index uses `-1` for an unused reference. An index of `0` is valid and selects the first entry.
+
+Strings in data blocks are null-terminated UTF-8 strings. The null byte is included in the byte limits below.
 
 ## Version Item (type_id = 0)
 
-There is exactly one version item per map. It contains only the version number.
+The map version item has ID 0 and a 4-byte payload.
 
 | Field | Type | Description |
-| ----- | :--: | :---------- |
-| version | int | Always `1` in vanilla and DDNet maps. |
+| --- | --- | --- |
+| version | Integer | `1` for the map format described here. |
+
+This is the **map version**, not the datafile version or a layer item version.
 
 ## Info Item (type_id = 1)
 
-There is exactly one info item per map. It contains metadata about the map and its author.
+The Info item has ID 0 and a 20-byte payload. It is optional in older maps.
 
 | Field | Type | Description |
-| ----- | :--: | :---------- |
-| version | int | Info item version. Always `1`. |
-| author | data index | Index to a data block containing the author name (max 32 bytes). |
-| map_version | data index | Index to a data block containing the map version string (max 16 bytes). |
-| credits | data index | Index to a data block containing the credits string (max 128 bytes). |
-| license | data index | Index to a data block containing the license string (max 32 bytes). |
+| --- | --- | --- |
+| version | Integer | Info item version: `1`. |
+| author | Data index | Author string, up to 32 bytes. |
+| map_version | Data index | Map revision string, up to 16 bytes. |
+| credits | Data index | Credits string, up to 128 bytes. |
+| license | Data index | License string, up to 32 bytes. |
 
-:::info
-All string data indices are optional and can be `-1` if the field is not present.
-:::
+All four string references may be `-1`. The strings are not stored inline in the item. For example, `author = 2` means that the author string is in data block 2. The byte limits are the capacities used by the 0.6 editor.
+
+```c
+function resolveMetadataString(dataIndex):
+    if dataIndex == -1:
+        return ""
+    return readString(dataBlocks[dataIndex])
+```
 
 ## Image Item (type_id = 2)
 
-Images can be either **embedded** (stored inside the map file) or **external** (loaded from the client's `mapres` directory).
+The payload is 24 bytes for version 1 and 28 bytes for version 2.
 
 | Field | Type | Description |
-| ----- | :--: | :---------- |
-| version | int | Image item version (`1` or `2`). |
-| width | int | Image width in pixels. |
-| height | int | Image height in pixels. |
-| external | int | `1` if external, `0` if embedded. |
-| image_name | data index | Index to a data block containing the image filename. |
-| image_data | data index | Index to a data block containing the image pixel data. |
-| format | int | *(Version 2 only)* Image format: `0` = RGB, `1` = RGBA. |
+| --- | --- | --- |
+| version | Integer | Image item version: `1` or `2`. |
+| width | Integer | Width in pixels. |
+| height | Integer | Height in pixels. |
+| external | Integer | `0` for embedded; `1` for external. |
+| image_name | Data index | Image name without the `.png` extension, up to 128 bytes. |
+| image_data | Data index | Raw pixel data; `-1` for an external image. |
+| format | Integer | Version 2 only: `0` = RGB, `1` = RGBA. |
 
-### External Images
+Version 1 embedded images always use RGBA. Embedded pixels are stored in row-major order, without a PNG header:
 
-External images must be present in the client's `mapres` folder under the `image_name`. The following images are considered external by the Teeworlds 0.6 client:
+```text
+RGB:  width * height * 3 bytes
+RGBA: width * height * 4 bytes
+```
 
-`bg_cloud1`, `bg_cloud2`, `desert_doodads`, `desert_main`, `desert_mountains2`, `desert_mountains`, `desert_sun`, `generic_deathtiles`, `generic_unhookable`, `grass_doodads`, `grass_main`, `jungle_background`, `jungle_deathtiles`, `jungle_doodads`, `jungle_main`, `jungle_midground`, `jungle_unhookables`, `moon`, `mountains`, `snow`, `stars`, `sun`, `winter_doodads`, `winter_main`, `winter_mountains2`, `winter_mountains3`, `winter_mountains`
+When `external = 1`, the client loads `mapres/<image_name>.png`. When `external = 0`, it reads the pixels from the `image_data` block.
+
+For example, `dm1.map` references `bg_cloud1`, `bg_cloud2`, `bg_cloud3`, `grass_doodads`, `grass_main`, `mountains`, and `sun` as external images. A custom external image will only work for clients that already have it. Embed custom images when distributing a map.
 
 ## Group Item (type_id = 4)
 
-Groups organize layers. Each group contains a contiguous range of layers and defines parallax and clipping settings.
+Groups contain consecutive layers and define how they appear relative to the camera.
 
 | Field | Type | Description |
-| ----- | :--: | :---------- |
-| version | int | Group item version (`1`, `2`, or `3`). |
-| offset_x | int | Horizontal offset in pixels. |
-| offset_y | int | Vertical offset in pixels. |
-| parallax_x | int | Horizontal parallax (100 = normal). |
-| parallax_y | int | Vertical parallax (100 = normal). |
-| start_layer | int | Index of the first layer in this group. |
-| num_layers | int | Number of layers in this group. |
-| use_clipping | int | *(Version 2+)* `1` if clipping is enabled. |
-| clip_x | int | *(Version 2+)* Clipping region X. |
-| clip_y | int | *(Version 2+)* Clipping region Y. |
-| clip_w | int | *(Version 2+)* Clipping region width. |
-| clip_h | int | *(Version 2+)* Clipping region height. |
-| name | I32String | *(Version 3+)* Group name (3 ints). |
+| --- | --- | --- |
+| version | Integer | Group item version: `1`, `2`, or `3`. |
+| offset_x | Integer | Horizontal view offset in world units. |
+| offset_y | Integer | Vertical view offset in world units. |
+| parallax_x | Integer | Horizontal camera factor, in percent. |
+| parallax_y | Integer | Vertical camera factor, in percent. |
+| start_layer | Integer | Index of the first layer within the layer item type. |
+| num_layers | Integer | Number of layers in this group. |
+| use_clipping | Integer | Version 2+: whether clipping is enabled. |
+| clip_x | Integer | Version 2+: clipping rectangle X in game-world coordinates. |
+| clip_y | Integer | Version 2+: clipping rectangle Y. |
+| clip_w | Integer | Version 2+: clipping width. |
+| clip_h | Integer | Version 2+: clipping height. |
+| name | I32String | Version 3+: 3 integers, capacity 11 UTF-8 bytes plus a terminator. |
+
+Payload sizes are 28, 48, and 60 bytes for versions 1, 2, and 3 respectively.
+
+A parallax factor of 100 follows the camera normally. A factor of 0 produces a camera-independent view; smaller factors are commonly used for distant backgrounds. With a factor of 25, moving the camera 100 world units changes that group's view center by 25 units.
+
+A group's layers occupy indices `start_layer` through `start_layer + num_layers - 1` in the layer list. For example, `start_layer = 8` and `num_layers = 6` selects layers 8 through 13.
+
+Clipping limits drawing to the group's rectangle. It affects rendering, not collision.
 
 ### The Game Group
 
-Every map must have a **Game group**. This group should have `offset_x = 0`, `offset_y = 0`, `parallax_x = 100`, `parallax_y = 100`, and a name of `"Game"`. The Game group is the only group that can contain physics layers (the Game layer).
+The group containing the flagged [Game layer](./game-layer.md) is the Game group. Identify it by its layer, not by a name comparison. Older groups have no name field.
 
-## Envelope Item (type_id = 3)
+Its expected view settings are offsets of 0, parallax factors of 100, and clipping disabled. The 0.6 reference loader normalizes these settings when it finds the Game layer.
 
-Envelopes define animations for positions, colors, and sounds over time.
-
-| Field | Type | Description |
-| ----- | :--: | :---------- |
-| version | int | Envelope version (`1` or `2`). |
-| channels | int | Envelope type: `1` = Sound, `3` = Position, `4` = Color. |
-| start_point | int | Index of the first envelope point for this envelope. |
-| num_points | int | Number of envelope points. |
-| name | I32String | Envelope name (8 ints). |
-| synchronized | int | *(Version 2+)* `1` if the envelope syncs to server time. |
-
-## Envelope Points (type_id = 6)
-
-There is exactly one envelope points item per map. It contains all envelope points for all envelopes, stored consecutively as 32-bit integers. Each point is **6 ints** in size:
-
-| Field | Type | Description |
-| ----- | :--: | :---------- |
-| time | int | Timestamp in milliseconds. |
-| curve_type | int | Curve type between this point and the next. |
-| values[4] | int[4] | Point values (depends on envelope type). |
-
-### Curve Types
-
-| Value | Name | Description |
-| ----- | :--- | :---------- |
-| 0 | Step | Abrupt change at the next point. |
-| 1 | Linear | Linear interpolation. |
-| 2 | Slow | Slow start, fast end. |
-| 3 | Fast | Fast start, slow end. |
-| 4 | Smooth | Smooth easing. |
-
-### Values by Envelope Type
-
-- **Sound envelope**: `values[0]` = volume, `values[1..3]` = unused.
-- **Position envelope**: `values[0]` = x, `values[1]` = y, `values[2]` = rotation, `values[3]` = unused.
-- **Color envelope**: `values[0]` = r, `values[1]` = g, `values[2]` = b, `values[3]` = a.
-
-:::info
-Color values are stored as 32-bit integers representing the color component (0-255).
-:::
-
-## I32String Encoding
-
-Some fields use a special string encoding called **I32String**. Instead of a data block index, the string is stored directly as consecutive 32-bit integers:
-
-1. Each integer represents 4 characters packed as big-endian bytes.
-2. Each byte has 128 added to it (wrapping subtraction is used to recover the original value).
-3. The string is null-terminated (a `\0` byte in one of the integers).
-
-Example decoding pseudo-code:
-
-```c
-for (i = 0; i < num_ints; i++) {
-    int val = read_int()
-    bytes = int_to_big_endian_bytes(val)
-
-    for (b = 0; b < 4; b++) {
-        char c = bytes[b] - 128
-        if (c == '\0') break
-        append_to_string(c)
-    }
-}
-```
+A Game group can also contain visual layers. In `dm1.map`, group 6 contains layers 8 through 13, but only layer 10 is the Game layer.

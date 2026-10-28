@@ -1,139 +1,167 @@
 # Layers
 
-This page describes the layer types found in Teeworlds 0.6 maps. Layers define the visual and physical structure of the game world.
+Layers are map items with `type_id = 5`. There are two layer types: **tilemaps**, which contain grids, and **quads**, which contain four-corner visual shapes. The layer item points to a data block containing those tiles or quads.
 
-## Layer Item (type_id = 5)
+## Common Header
 
-Every layer item starts with a common header. The remaining fields depend on the layer type.
-
-### Common Header
+Every layer item begins with these three integers:
 
 | Field | Type | Description |
-| ----- | :--: | :---------- |
-| _version | int | Unused (was uninitialized in the editor). |
-| type | int | Layer type: `2` = Tilemap, `3` = Quads. |
-| flags | int | Layer flags (see below). |
+| --- | --- | --- |
+| _version | Integer | Unused base-layer version. Do not use it to select the payload layout. |
+| type | Integer | `2` = Tilemap, `3` = Quads. |
+| flags | Integer | Common layer flags. |
 
-### Layer Flags
+The only common layer flag described here is `LAYERFLAG_DETAIL = 1`. It marks a visual layer that can be skipped when high detail is disabled. The Game layer remains active regardless of this flag.
 
-| Value | Name | Description |
-| ----- | :--- | :---------- |
-| 1 | LAYERFLAG_DETAIL | Layer should only be rendered on high detail settings. |
+:::info
+The common `flags` field and the tilemap's own `flags` field are separate. The Game flag belongs to the tilemap field.
+:::
 
 ## Tilemap Layer
 
-Tilemap layers contain a grid of tiles. They are the most common layer type and include both visual tiles and the physics-defining Game layer.
+After the common header, the fields are:
 
-```sh
-// ...common header...
-byte[*-...]  // version       - tilemap version (up to 4)
-byte[*-...]  // width         - layer width in tiles
-byte[*-...]  // height        - layer height in tiles
-byte[*-...]  // flags         - tilemap flags (see below)
-byte[*-...]  // color_r       - color tint (red, 0-255)
-byte[*-...]  // color_g       - color tint (green, 0-255)
-byte[*-...]  // color_b       - color tint (blue, 0-255)
-byte[*-...]  // color_a       - color tint (alpha, 0-255)
-byte[*-...]  // color_env     - color envelope index (-1 if unused)
-byte[*-...]  // color_env_offset - color envelope time offset
-byte[*-...]  // image         - image index (-1 if unused)
-byte[*-...]  // data          - index to the tile data block
-byte[*-...]  // name          - (version 3+) I32String name (3 ints)
+| Field | Type | Description |
+| --- | --- | --- |
+| version | Integer | Tilemap item version; the 0.6 editor writes `3`. Older maps commonly use `2`. |
+| width | Integer | Grid width in tiles. |
+| height | Integer | Grid height in tiles. |
+| flags | Integer | `1` = `TILESLAYERFLAG_GAME`; `0` = visual tilemap. |
+| color_r | Integer | Red tint, 0 to 255. |
+| color_g | Integer | Green tint, 0 to 255. |
+| color_b | Integer | Blue tint, 0 to 255. |
+| color_a | Integer | Alpha tint, 0 to 255. |
+| color_env | Item index | Color envelope index, or `-1`. |
+| color_env_offset | Integer | Envelope time offset in milliseconds. |
+| image | Item index | Image index, or `-1`. |
+| data | Data index | Tile grid data block. |
+| name | I32String | Version 3+: 3 integers. |
+
+Including the common header, the version 2 layout occupies 60 bytes and version 3 occupies 72 bytes.
+
+A normal 0.6 tile grid contains `width * height` records, each 4 bytes long. Its uncompressed size is:
+
+```c
+width * height * 4
 ```
 
-### Tilemap Flags
+Tiles are stored in **row-major order**, from left to right and then top to bottom:
 
-| Value | Name | Description |
-| ----- | :--- | :---------- |
-| 0 | TILESLAYERFLAG_NONE | Regular visual tiles layer. |
-| 1 | TILESLAYERFLAG_GAME | Game layer (defines physics and entities). |
+```c
+record_index = tile_y * width + tile_x
+byte_offset = record_index * 4
+```
+
+For a grid with width 3 and height 2:
+
+```text
+          x=0 x=1 x=2
+y=0        0   1   2
+y=1        3   4   5
+```
+
+Tile `(2, 1)` is record `1 * 3 + 2 = 5`, starting at byte `5 * 4 = 20` in the uncompressed tile block. These record numbers are grid positions, not the tile indices stored in the records.
 
 ### Tile Structure
 
-Each tile is **4 bytes** in the data block:
-
-| Byte | Name | Description |
-| :--: | :--- | :---------- |
-| 0 | index | Tile index (0 = air, 1 = solid, 2 = death, 3 = unhookable, 192+ = entities). |
-| 1 | flags | Tile flags (see below). |
-| 2 | skip | Skip count for version 4 compression (set to 0 after expansion). |
+| Relative byte | Field | Description |
+| --- | --- | --- |
+| 0 | index | Unsigned tile index. Its meaning depends on the layer. |
+| 1 | flags | Texture transformation and opacity flags. |
+| 2 | skip | Rendering skip count. It does not remove records from a 0.6 grid. |
 | 3 | reserved | Unused. |
+
+For visual layers, the index selects a tile in the layer's image. For the Game layer, it selects a physics tile or entity marker. Do not interpret visual layer indices as collision or entity types.
+
+For example, these four bytes describe a solid Game layer tile:
+
+```text
+01 00 00 00
+// index = 1, flags = 0, skip = 0, reserved = 0
+```
+
+The same index in a visual layer selects image tile 1; it does not create a wall.
 
 ### Tile Flags
 
-| Value | Name | Description |
-| ----- | :--- | :---------- |
-| 1 | TILEFLAG_VFLIP | Vertical flip. |
-| 2 | TILEFLAG_HFLIP | Horizontal flip. |
-| 4 | TILEFLAG_OPAQUE | Opaque (for rendering). |
-| 8 | TILEFLAG_ROTATE | 90° rotation.
+| Value | Source name | Effect in the 0.6 renderer |
+| --- | --- | --- |
+| 1 | TILEFLAG_VFLIP | Flips texture coordinates left to right. |
+| 2 | TILEFLAG_HFLIP | Flips texture coordinates top to bottom. |
+| 4 | TILEFLAG_OPAQUE | Marks a tile as opaque for rendering. |
+| 8 | TILEFLAG_ROTATE | Rotates texture coordinates by 90 degrees. |
 
-The order of operations is: horizontal flip → vertical flip → rotation.
+The renderer applies the left-right flip, then the top-bottom flip, then rotation. Flags can be combined using bitwise OR.
 
-### Skip Compression (Version 4)
+These flags do not rotate or change collision shapes. Game layer collision is determined by the tile index.
 
-In version 4 tilemaps, the `skip` byte is used for compression. Instead of storing a full 2D grid, tiles with the same value are stored once with a skip count indicating how many identical tiles follow.
+### The Skip Byte
 
-Example: a tile with `skip = 3` means "this tile repeats 3 more times" (4 total identical tiles). After expanding, set `skip = 0` on all tiles.
+The client generates skip counts to skip runs of empty tiles during rendering. The grid contains every tile record, located at `4 * (y * width + x)`.
+
+For datafile version 4, decompress the tile data block with zlib before reading the grid.
 
 ## Game Layer
 
-The Game layer is a tilemap layer with `TILESLAYERFLAG_GAME` set. It defines the physics of the world and the positions of entities.
+The Game layer is a tilemap with `TILESLAYERFLAG_GAME` set. Each tile occupies 32 by 32 world units and identifies a collision tile or an entity marker.
 
-### Physics Tiles
-
-| Index | Name | Description |
-| ----- | :--- | :---------- |
-| 0 | TILE_AIR | Empty space. |
-| 1 | TILE_SOLID | Solid wall (players collide). |
-| 2 | TILE_DEATH | Death tile (kills on contact). |
-| 3 | TILE_NOHOOK | Solid but unhookable (hook bounces off). |
-
-### Entity Tiles
-
-Entity tiles use indices from 192 to 202. Each entity spawns at the center of its tile (pixel position = `tile_x * 32 + 16`, `tile_y * 32 + 16`).
-
-| Index | Name | Description |
-| ----- | :--- | :---------- |
-| 192 | ENTITY_SPAWN | DM/TDM spawn point. |
-| 193 | ENTITY_SPAWN_RED | Red team spawn point. |
-| 194 | ENTITY_SPAWN_BLUE | Blue team spawn point. |
-| 195 | ENTITY_FLAGSTAND_RED | Red flag stand (CTF). |
-| 196 | ENTITY_FLAGSTAND_BLUE | Blue flag stand (CTF). |
-| 197 | ENTITY_ARMOR_1 | Armor pickup. |
-| 198 | ENTITY_HEALTH_1 | Health pickup. |
-| 199 | ENTITY_WEAPON_SHOTGUN | Shotgun pickup. |
-| 200 | ENTITY_WEAPON_GRENADE | Grenade pickup. |
-| 201 | ENTITY_POWERUP_NINJA | Ninja powerup. |
-| 202 | ENTITY_WEAPON_RIFLE | Laser rifle pickup. |
+The [Game Layer](./game-layer.md) page lists these indices and explains spawn positions, death tiles, and map clipping.
 
 ## Quads Layer
 
-Quads layers contain textured rectangles. They are used for visual elements like backgrounds and decorations.
+Quads define four-corner visual shapes, such as backgrounds and decorations. They have no effect on server collision.
 
-```sh
-// ...common header...
-byte[*-...]  // version   - quads version (up to 2)
-byte[*-...]  // num_quads - number of quads
-byte[*-...]  // data      - index to the quads data block
-byte[*-...]  // image     - image index
-byte[*-...]  // name      - (version 2+) I32String name (3 ints)
-```
+After the common header, the fields are:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| version | Integer | Quads item version: `1` or `2`. |
+| num_quads | Integer | Number of quads. |
+| data | Data index | Quad data block. |
+| image | Item index | Image index, or `-1` for untextured quads. |
+| name | I32String | Version 2+: 3 integers. |
+
+Including the common header, version 1 occupies 28 bytes and version 2 occupies 40 bytes. The data block contains `num_quads * 152` uncompressed bytes.
 
 ### Quad Structure
 
-Each quad is **152 bytes** (38 ints) in the data block:
+Each quad contains 38 little-endian integers, totaling 152 bytes:
 
-| Field | Ints | Type | Description |
-| ----- | :--: | :--: | :---------- |
-| positions | 10 | Point[5] | 5 corner positions (22.10 fixed-point). |
-| corner_colors | 16 | Color[4] | 4 corner colors (r, g, b, a). |
-| texture_coords | 8 | Point[4] | 4 texture coordinates (0-1024 range). |
-| pos_env | 1 | int | Position envelope index (-1 if unused). |
-| pos_env_offset | 1 | int | Position envelope time offset. |
-| color_env | 1 | int | Color envelope index (-1 if unused). |
-| color_env_offset | 1 | int | Color envelope time offset. |
+| Field | Integer count | Description |
+| --- | ---: | --- |
+| positions | 10 | Five `(x, y)` points: four corners followed by the pivot. |
+| corner_colors | 16 | Four `(r, g, b, a)` colors; each component is 0 to 255. |
+| texture_coords | 8 | Four `(u, v)` texture coordinate pairs. |
+| pos_env | 1 | Position envelope index, or `-1`. |
+| pos_env_offset | 1 | Position envelope offset in milliseconds. |
+| color_env | 1 | Color envelope index, or `-1`. |
+| color_env_offset | 1 | Color envelope offset in milliseconds. |
 
-:::info
-Corner order: top-left → top-right → bottom-left → bottom-right. The 5th point in `positions` is the pivot. Divide positions by 512 to get world coordinates. Divide texture coordinates by 1024 to normalize to (0, 1) range.
-:::
+The corner order is top-left, top-right, bottom-left, bottom-right. The fifth point is the rotation pivot, not another corner.
+
+Positions and texture coordinates use signed **22.10 fixed-point** encoding:
+
+```c
+world_position = stored_position / 1024
+texture_coordinate = stored_texture_coordinate / 1024
+```
+
+For example, stored position `32768` represents world position `32`. A texture coordinate of `1024` represents `1.0`. Texture coordinates may extend beyond the usual 0 to 1 range.
+
+A position envelope adds X and Y offsets and rotates the corners around the pivot. A color envelope multiplies each corner's color. These calculations are performed by the client.
+
+## Example: dm1.map
+
+The Game layer in the example `dm1.map` is layer index 10. It belongs to group 6 and has:
+
+| Field | Value |
+| --- | ---: |
+| tilemap version | 2 |
+| width | 60 |
+| height | 50 |
+| tilemap flags | 1 |
+| image | -1 |
+| data | 17 |
+
+Its tile block expands from zlib to `60 * 50 * 4 = 12000` bytes. The world spans 1920 by 1600 units. The other layers in that group are visual tilemaps; they are not additional collision layers.
